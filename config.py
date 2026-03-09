@@ -10,7 +10,9 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 # インデックス・データの保存先
-DATA_DIR = PROJECT_ROOT / "data"
+# HuggingFace Spaces では /data が永続ストレージ。それ以外はプロジェクト内の data/ を使用。
+_hf_data = Path("/data")
+DATA_DIR = _hf_data if _hf_data.exists() else PROJECT_ROOT / "data"
 INDEX_DIR = DATA_DIR / "index"
 TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
 UPLOADS_DIR = DATA_DIR / "uploads"
