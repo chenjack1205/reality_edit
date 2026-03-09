@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import config
 
-_local_model = None
-
 
 def embed_texts(texts: list[str], task: str = "retrieval_document") -> list[list[float]]:
-    """テキストリストをローカルモデルでベクトル化して返す。"""
+    """テキストリストをローカルモデルでベクトル化して返す。使用後にモデルを解放。"""
     if not texts:
         return []
-    global _local_model
-    if _local_model is None:
-        from sentence_transformers import SentenceTransformer
-        _local_model = SentenceTransformer(config.LOCAL_EMBEDDING_MODEL)
-    return _local_model.encode(texts).tolist()
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer(config.LOCAL_EMBEDDING_MODEL)
+    result = model.encode(texts).tolist()
+    del model
+    import gc
+    gc.collect()
+    return result

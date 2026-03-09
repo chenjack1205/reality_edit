@@ -3,7 +3,9 @@
 各音声ファイルに「収録開始日時（file_start_iso）」を付与することで、
 シーンの絶対日時（何日の何時何分）を記録できる。
 """
+import gc
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -11,6 +13,8 @@ from pathlib import Path
 import config
 from src.embeddings import embed_texts
 from src.transcribe import transcribe_sources, TranscriptSegment
+
+logger = logging.getLogger(__name__)
 
 
 def _speaker_to_filename(speaker: str) -> str:
@@ -115,13 +119,18 @@ def build_index(
     # file_start_iso は speaker でルックアップできるよう辞書化
     start_iso_map = {spk: iso for _, spk, iso in sources}
 
-    all_scenes: list[dict] = []
-    for speaker, path, segments in transcribe_sources(
+    logger.info("Whisper文字起こし開始（モデル: %s）", whisper_model_size)
+    transcription_results = transcribe_sources(
         transcribe_input, model_size=whisper_model_size, language=language
-    ):
+    )
+    logger.info("Whisper文字起こし完了 → メモリ解放済み")
+
+    all_scenes: list[dict] = []
+    for speaker, path, segments in transcription_results:
         file_start_iso = start_iso_map.get(speaker, "")
         scenes = segments_to_scenes(speaker, segments, file_start_iso=file_start_iso)
         all_scenes.extend(scenes)
+        logger.info("  %s: %d セグメント → %d シーン", speaker, len(segments), len(scenes))
 
         transcript_path = out_dir / f"{_speaker_to_filename(speaker)}.json"
         with open(transcript_path, "w", encoding="utf-8") as f:
@@ -132,11 +141,15 @@ def build_index(
                 indent=2,
             )
 
+    gc.collect()
+
     if not all_scenes:
         return all_scenes
 
+    logger.info("埋め込みベクトル計算開始（%d テキスト）", len(all_scenes))
     texts = [s["text"] for s in all_scenes]
     embeddings = embed_texts(texts, task="retrieval_document")
+    logger.info("埋め込みベクトル計算完了 → ChromaDB保存開始")
 
     import chromadb
 

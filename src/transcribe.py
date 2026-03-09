@@ -4,7 +4,7 @@
 """
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Iterator
+import gc
 
 from faster_whisper import WhisperModel
 
@@ -19,7 +19,7 @@ class TranscriptSegment:
 
 def load_whisper(model_size: str = "small", device: str = "auto"):
     """Whisperモデルをロード。device は 'cpu' / 'cuda' / 'auto'。"""
-    return WhisperModel(model_size, device=device)
+    return WhisperModel(model_size, device=device, compute_type="int8")
 
 
 def transcribe_file(
@@ -52,16 +52,23 @@ def transcribe_sources(
     sources: list[tuple[Path, str]],
     model_size: str = "small",
     language: str | None = "ja",
-) -> Iterator[tuple[str, Path, list[TranscriptSegment]]]:
+) -> list[tuple[str, Path, list[TranscriptSegment]]]:
     """
     話者付き音声を順に文字起こしする。
-    sources: (音声ファイルパス, 話者名) のリスト。同じ時間軸で録音された複数話者（例: 6人なら6ファイル）を想定。
-    各要素で (話者名, パス, セグメントリスト) を yield。
+    sources: (音声ファイルパス, 話者名) のリスト。
+    全ファイル処理後にWhisperモデルをメモリから解放する。
     """
     model = load_whisper(model_size)
+    results = []
     for path, speaker in sources:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"音声が見つかりません: {path}")
         segments = transcribe_file(path, model=model, language=language)
-        yield speaker, path, segments
+        results.append((speaker, path, segments))
+
+    del model
+    import gc
+    gc.collect()
+
+    return results

@@ -19,7 +19,7 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 
 # Whisper モデル（tiny = 超軽量、base = 軽量、small = バランス、large-v3 = 高精度）
 # 無料サーバー(512MB RAM)では base を推奨。ローカルなら small 以上を推奨。
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny")
 
 # ── Gemini API（検索の再ランキングのみ）──────────────────────────────────────
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")

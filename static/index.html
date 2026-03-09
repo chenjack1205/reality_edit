@@ -731,7 +731,7 @@
         const data = await r.json();
         dots = (dots + 1) % 4;
         if (data.state === 'running') {
-          showMsg(indexMsg, `<span class="spinner"></span>&nbsp; 音声ファイルを解析中${'…'.repeat(dots+1)}&nbsp; 音声が長い場合は数十分かかります。このページを開いたままにしてください。`, 'info');
+          showMsg(indexMsg, `<span class="spinner"></span>&nbsp; 音声ファイルを解析中${'…'.repeat(dots+1)}&nbsp; 初回はAIモデルのダウンロードで数分かかります。このページを開いたままにしてください。`, 'info');
         } else if (data.state === 'done') {
           clearInterval(timer);
           showMsg(indexMsg, '✅&nbsp; 解析が完了しました！ 下の検索欄からシーンを検索できます。', 'success');
@@ -741,6 +741,11 @@
         } else if (data.state === 'error') {
           clearInterval(timer);
           showMsg(indexMsg, `エラーが発生しました: ${data.error}`, 'error');
+          indexBtn.disabled = false; setStep(1);
+        } else if (data.state === 'idle') {
+          // サーバーが再起動してステータスがリセットされた
+          clearInterval(timer);
+          showMsg(indexMsg, 'サーバーが再起動しました。もう一度「解析開始」を押してください。', 'error');
           indexBtn.disabled = false; setStep(1);
         }
       } catch {
