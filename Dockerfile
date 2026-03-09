@@ -23,6 +23,4 @@ COPY . .
 RUN mkdir -p data/uploads data/index data/transcripts
 
 EXPOSE 8000
-COPY start.sh .
-RUN chmod +x start.sh
-CMD ["./start.sh"]
+CMD ["python", "app.py"]
