@@ -7,10 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# CPU専用PyTorchを先にインストール（CUDA版を避けることで ~2GB → ~250MB に削減）
+# CPU専用PyTorchをインストール（CUDA版を避けてイメージサイズ削減）
 RUN pip install --no-cache-dir \
-    torch==2.2.2 \
-    --index-url https://download.pytorch.org/whl/cpu
+    torch --index-url https://download.pytorch.org/whl/cpu
 
 # 残りの依存パッケージ
 COPY requirements.txt .
