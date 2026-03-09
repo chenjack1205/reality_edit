@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.env
+data/uploads/
+data/index/
+data/transcripts/
+*.egg-info/
+.DS_Store

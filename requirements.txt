@@ -1,0 +1,21 @@
+# 文字起こし（タイムスタンプ付き）
+faster-whisper>=1.0.0
+
+# 意味検索用の埋め込み・ベクトルDB
+sentence-transformers>=2.2.0
+chromadb>=0.4.0
+
+# 動画処理
+ffmpeg-python>=0.2.0
+
+# Web（ブラウザからアップロード・検索）
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+python-multipart>=0.0.7
+
+# Gemini API（埋め込み・再ランキング）※ 旧 google-generativeai から移行
+google-genai>=1.0.0
+
+# CLI・ユーティリティ
+python-dotenv>=1.0.0
+rich>=13.0.0
