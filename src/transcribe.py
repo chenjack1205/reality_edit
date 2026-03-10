@@ -61,28 +61,35 @@ def _get_duration(audio_path: Path) -> float:
 
 
 def _split_audio(audio_path: Path, chunk_sec: int, tmp_dir: Path) -> list[tuple[Path, float]]:
-    """ffmpegで音声をchunk_sec秒ごとに分割。(ファイルパス, 開始秒) のリストを返す。"""
+    """
+    ffmpegで音声をchunk_sec秒ごとに正確に分割。(ファイルパス, 開始秒) のリストを返す。
+    WAVに再エンコードすることでキーフレームによるタイムスタンプずれを防ぐ。
+    """
     duration = _get_duration(audio_path)
     if duration <= 0:
         return [(audio_path, 0.0)]
 
-    suffix = audio_path.suffix.lower() or ".m4a"
     chunks = []
     start = 0.0
     idx = 0
     while start < duration:
-        chunk_path = tmp_dir / f"chunk_{idx:04d}{suffix}"
+        # WAVに再エンコード（-ss を -i の後に置いて正確なシーク）
+        chunk_path = tmp_dir / f"chunk_{idx:04d}.wav"
         cmd = [
             "ffmpeg", "-y",
+            "-i", str(audio_path),
             "-ss", str(start),
             "-t", str(chunk_sec),
-            "-i", str(audio_path),
-            "-c", "copy",
+            "-ac", "1",          # モノラル（ファイルサイズ削減）
+            "-ar", "16000",      # 16kHz（音声認識に十分）
+            "-sample_fmt", "s16",
             str(chunk_path),
         ]
-        subprocess.run(cmd, capture_output=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, timeout=300)
         if chunk_path.exists() and chunk_path.stat().st_size > 0:
             chunks.append((chunk_path, start))
+        else:
+            print(f"[transcribe] チャンク分割失敗 start={start}: {result.stderr.decode()[-200:]}", flush=True)
         start += chunk_sec
         idx += 1
 
@@ -186,12 +193,14 @@ def _transcribe_file_gemini(
         chunks = _split_audio(audio_path, _CHUNK_SEC, Path(tmp_dir))
         all_segments: list[TranscriptSegment] = []
         for idx, (chunk_path, offset_sec) in enumerate(chunks):
+            # チャンクはWAVに変換済みなのでMIMEタイプを上書き
+            chunk_mime = _MIME_MAP.get(chunk_path.suffix.lower(), mime_type)
             try:
                 segs = _upload_and_transcribe_chunk(
                     client=client,
                     chunk_path=chunk_path,
                     offset_sec=offset_sec,
-                    mime_type=mime_type,
+                    mime_type=chunk_mime,
                     language=language,
                     file_label=audio_path.name,
                     chunk_idx=idx,
