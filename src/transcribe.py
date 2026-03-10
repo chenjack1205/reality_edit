@@ -45,9 +45,19 @@ def _transcribe_file_gemini(
 
     client = genai.Client(api_key=config.GEMINI_API_KEY)
 
+    import shutil, tempfile
     mime_type = _MIME_MAP.get(audio_path.suffix.lower(), "audio/mpeg")
     print(f"[transcribe] Gemini: アップロード中 {audio_path.name} ({mime_type})", flush=True)
-    uploaded = client.files.upload(file=audio_path, config={"mime_type": mime_type})
+
+    # Gemini APIはファイル名にASCII以外を受け付けないので一時ファイルで回避
+    suffix = audio_path.suffix.lower()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    shutil.copy2(audio_path, tmp_path)
+    try:
+        uploaded = client.files.upload(file=tmp_path, config={"mime_type": mime_type})
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
     prompt = f"""この音声ファイルを正確に文字起こししてください。
 言語: {"日本語" if language == "ja" else language}
