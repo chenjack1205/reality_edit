@@ -30,7 +30,7 @@ USE_GEMINI: bool = bool(GEMINI_API_KEY)
 # Gemini無効時のみローカルモデルでベクトル検索
 LOCAL_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 
-GEMINI_CHAT_MODEL = "gemini-2.0-flash"
+GEMINI_CHAT_MODEL = "gemini-2.5-flash"
 
 TOP_K = 3
 RERANK_CANDIDATE_K = 10
