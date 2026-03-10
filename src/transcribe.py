@@ -21,6 +21,20 @@ class TranscriptSegment:
 
 # ── Gemini 文字起こし ───────────────────────────────────────────────────────
 
+_MIME_MAP = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+    ".wma": "audio/x-ms-wma",
+    ".webm": "audio/webm",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+}
+
+
 def _transcribe_file_gemini(
     audio_path: Path,
     language: str = "ja",
@@ -31,8 +45,9 @@ def _transcribe_file_gemini(
 
     client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-    print(f"[transcribe] Gemini: ファイルアップロード中 {audio_path.name}", flush=True)
-    uploaded = client.files.upload(file=audio_path)
+    mime_type = _MIME_MAP.get(audio_path.suffix.lower(), "audio/mpeg")
+    print(f"[transcribe] Gemini: アップロード中 {audio_path.name} ({mime_type})", flush=True)
+    uploaded = client.files.upload(file=audio_path, config={"mime_type": mime_type})
 
     prompt = f"""この音声ファイルを正確に文字起こししてください。
 言語: {"日本語" if language == "ja" else language}
