@@ -39,8 +39,8 @@ _MIME_MAP = {
     ".mov": "video/quicktime",
 }
 
-# 1チャンクの長さ（秒）。Geminiの出力トークン上限対策
-_CHUNK_SEC = 180  # 3分
+# 1チャンクの長さ（秒）。長いほどリクエスト数減・レート制限に有利
+_CHUNK_SEC = 300  # 5分
 
 
 def _get_duration(audio_path: Path) -> float:
