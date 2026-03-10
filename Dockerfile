@@ -21,9 +21,8 @@ COPY . .
 # データ用ディレクトリを作成
 RUN mkdir -p data/uploads data/index data/transcripts
 
-# AIモデルをビルド時にダウンロード（起動時のダウンロード待ちをなくす）
+# Whisperモデルをプリダウンロード（Gemini失敗時のフォールバック用）
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8'); print('Whisper tiny downloaded')"
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2'); print('Embedding model downloaded')"
 
 EXPOSE 8000
 CMD ["python", "app.py"]
