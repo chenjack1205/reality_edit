@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -131,6 +132,20 @@ def _upload_and_transcribe_chunk(
     finally:
         tmp_path.unlink(missing_ok=True)
 
+    # ファイルが ACTIVE になるまで待機（最大60秒）
+    for _ in range(30):
+        file_info = client.files.get(name=uploaded.name)
+        state = getattr(file_info, "state", None)
+        if state is None or str(state) in ("ACTIVE", "FileState.ACTIVE", "2"):
+            break
+        if str(state) in ("FAILED", "FileState.FAILED", "3"):
+            raise RuntimeError(f"Geminiファイル処理失敗: {uploaded.name}")
+        time.sleep(2)
+    print(
+        f"[transcribe] Gemini: チャンク{chunk_idx+1}/{total_chunks} 文字起こし実行中",
+        flush=True,
+    )
+
     prompt = f"""この音声クリップを正確に文字起こししてください。
 言語: {"日本語" if language == "ja" else language}
 
@@ -202,6 +217,10 @@ def _transcribe_file_gemini(
         for idx, (chunk_path, offset_sec) in enumerate(chunks):
             # チャンクはWAVに変換済みなのでMIMEタイプを上書き
             chunk_mime = _MIME_MAP.get(chunk_path.suffix.lower(), mime_type)
+            # チャンク間インターバル（レート制限対策: 10 RPM = 6秒/リクエスト）
+            if idx > 0:
+                time.sleep(7)
+
             # 最大2回リトライ
             last_err = None
             for attempt in range(2):
@@ -225,6 +244,8 @@ def _transcribe_file_gemini(
                         f"[transcribe] チャンク{idx+1} 試行{attempt+1}/2 失敗: {e}",
                         flush=True,
                     )
+                    if attempt == 0:
+                        time.sleep(15)  # リトライ前に少し待つ
             if last_err is not None:
                 print(
                     f"[transcribe] チャンク{idx+1}/{len(chunks)} リトライ後も失敗 "
