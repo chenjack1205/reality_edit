@@ -62,38 +62,45 @@ def _get_duration(audio_path: Path) -> float:
 
 def _split_audio(audio_path: Path, chunk_sec: int, tmp_dir: Path) -> list[tuple[Path, float]]:
     """
-    ffmpegで音声をchunk_sec秒ごとに正確に分割。(ファイルパス, 開始秒) のリストを返す。
-    WAVに再エンコードすることでキーフレームによるタイムスタンプずれを防ぐ。
+    ffmpeg segment muxer で音声を chunk_sec 秒ごとに一括分割。
+    (ファイルパス, 開始秒) のリストを返す。
+    segment muxer はキーフレームではなく指定秒数で正確に切るため、
+    タイムスタンプのずれが最小限に抑えられる。
     """
     duration = _get_duration(audio_path)
     if duration <= 0:
         return [(audio_path, 0.0)]
 
+    out_pattern = str(tmp_dir / "chunk_%04d.wav")
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(audio_path),
+        "-ac", "1",           # モノラル
+        "-ar", "16000",       # 16kHz
+        "-sample_fmt", "s16",
+        "-f", "segment",
+        "-segment_time", str(chunk_sec),
+        "-reset_timestamps", "1",   # 各チャンクのタイムスタンプを0始まりにリセット
+        out_pattern,
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=600)
+
     chunks = []
-    start = 0.0
     idx = 0
-    while start < duration:
-        # WAVに再エンコード（-ss を -i の後に置いて正確なシーク）
+    while True:
         chunk_path = tmp_dir / f"chunk_{idx:04d}.wav"
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(audio_path),
-            "-ss", str(start),
-            "-t", str(chunk_sec),
-            "-ac", "1",          # モノラル（ファイルサイズ削減）
-            "-ar", "16000",      # 16kHz（音声認識に十分）
-            "-sample_fmt", "s16",
-            str(chunk_path),
-        ]
-        result = subprocess.run(cmd, capture_output=True, timeout=300)
-        if chunk_path.exists() and chunk_path.stat().st_size > 0:
-            chunks.append((chunk_path, start))
-        else:
-            print(f"[transcribe] チャンク分割失敗 start={start}: {result.stderr.decode()[-200:]}", flush=True)
-        start += chunk_sec
+        if not chunk_path.exists() or chunk_path.stat().st_size == 0:
+            break
+        offset = idx * chunk_sec
+        chunks.append((chunk_path, float(offset)))
         idx += 1
 
-    return chunks if chunks else [(audio_path, 0.0)]
+    if not chunks:
+        print(f"[transcribe] segment分割失敗: {result.stderr.decode()[-300:]}", flush=True)
+        return [(audio_path, 0.0)]
+
+    print(f"[transcribe] {len(chunks)} チャンクに分割完了", flush=True)
+    return chunks
 
 
 def _upload_and_transcribe_chunk(
@@ -224,6 +231,9 @@ def _transcribe_file_gemini(
                     f"(offset={offset_sec:.0f}s): {last_err}",
                     flush=True,
                 )
+
+    # チャンク間でタイムスタンプが逆行する場合があるので時系列に並び替え
+    all_segments.sort(key=lambda s: s.start_sec)
 
     print(
         f"[transcribe] Gemini: {audio_path.name} 合計 {len(all_segments)} セグメント",
