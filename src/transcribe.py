@@ -39,7 +39,7 @@ _MIME_MAP = {
 }
 
 # 1チャンクの長さ（秒）。Geminiの出力トークン上限対策
-_CHUNK_SEC = 300  # 5分
+_CHUNK_SEC = 180  # 3分
 
 
 def _get_duration(audio_path: Path) -> float:
@@ -146,7 +146,7 @@ def _upload_and_transcribe_chunk(
         contents=[uploaded, prompt],
         config=gtypes.GenerateContentConfig(
             response_mime_type="application/json",
-            max_output_tokens=8192,
+            max_output_tokens=16384,
         ),
     )
 
@@ -195,20 +195,35 @@ def _transcribe_file_gemini(
         for idx, (chunk_path, offset_sec) in enumerate(chunks):
             # チャンクはWAVに変換済みなのでMIMEタイプを上書き
             chunk_mime = _MIME_MAP.get(chunk_path.suffix.lower(), mime_type)
-            try:
-                segs = _upload_and_transcribe_chunk(
-                    client=client,
-                    chunk_path=chunk_path,
-                    offset_sec=offset_sec,
-                    mime_type=chunk_mime,
-                    language=language,
-                    file_label=audio_path.name,
-                    chunk_idx=idx,
-                    total_chunks=len(chunks),
+            # 最大2回リトライ
+            last_err = None
+            for attempt in range(2):
+                try:
+                    segs = _upload_and_transcribe_chunk(
+                        client=client,
+                        chunk_path=chunk_path,
+                        offset_sec=offset_sec,
+                        mime_type=chunk_mime,
+                        language=language,
+                        file_label=audio_path.name,
+                        chunk_idx=idx,
+                        total_chunks=len(chunks),
+                    )
+                    all_segments.extend(segs)
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    print(
+                        f"[transcribe] チャンク{idx+1} 試行{attempt+1}/2 失敗: {e}",
+                        flush=True,
+                    )
+            if last_err is not None:
+                print(
+                    f"[transcribe] チャンク{idx+1}/{len(chunks)} リトライ後も失敗 "
+                    f"(offset={offset_sec:.0f}s): {last_err}",
+                    flush=True,
                 )
-                all_segments.extend(segs)
-            except Exception as e:
-                print(f"[transcribe] チャンク{idx+1}失敗（スキップ）: {e}", flush=True)
 
     print(
         f"[transcribe] Gemini: {audio_path.name} 合計 {len(all_segments)} セグメント",
