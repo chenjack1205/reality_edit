@@ -1,10 +1,12 @@
 """
-自然言語クエリでシーンを検索し、「誰が何日何時何分で何を言っているか」を返す。
-GEMINI_API_KEY が設定されている場合:
-  1. Gemini 埋め込みで上位 RERANK_CANDIDATE_K 件を候補として取得
-  2. Gemini Flash がクエリとの関連度を判定し、最終 TOP_K 件に絞り込む
-未設定の場合:
-  ローカルモデルによるベクトル検索のみ（再ランキングなし）
+自然言語クエリでシーンを検索する。
+
+Gemini 有効時:
+  scenes.json を直接読み、Gemini にクエリとの関連度を判定させる。
+  ローカル埋め込みモデル不要 → メモリ大幅節約。
+
+Gemini 無効時:
+  ローカルモデルで埋め込み → ChromaDB ベクトル検索。
 """
 from __future__ import annotations
 
@@ -12,15 +14,11 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import chromadb
-
 import config
-from src.embeddings import embed_texts
 
 
 @dataclass
 class SceneHit:
-    """検索でヒットした1シーン（誰が・いつ・何を言ったか）"""
     speaker: str
     start_sec: float
     end_sec: float
@@ -28,7 +26,7 @@ class SceneHit:
     text: str
     abs_start_iso: str = field(default="")
     abs_end_iso: str = field(default="")
-    reason: str = field(default="")  # Gemini 再ランキング時の判定理由
+    reason: str = field(default="")
 
 
 def search(
@@ -36,78 +34,41 @@ def search(
     top_k: int | None = None,
     index_dir: Path | None = None,
 ) -> list[SceneHit]:
-    """
-    クエリで意味的に近いシーンを返す。
-    Gemini が有効なら候補を多めに取得して再ランキングする。
-    """
     top_k = top_k or config.TOP_K
-    index_path = index_dir or config.INDEX_DIR / "chroma"
+    index_dir = index_dir or config.INDEX_DIR
 
-    if not index_path.exists():
+    if config.USE_GEMINI:
+        return _search_with_gemini(query, top_k, index_dir)
+    else:
+        return _search_with_chroma(query, top_k, index_dir)
+
+
+# ── Gemini 直接検索 ─────────────────────────────────────────────────────────
+
+def _search_with_gemini(query: str, top_k: int, index_dir: Path) -> list[SceneHit]:
+    scenes_path = index_dir / "scenes.json"
+    if not scenes_path.exists():
         return []
 
-    client = chromadb.PersistentClient(path=str(index_path))
     try:
-        collection = client.get_collection("scenes")
+        all_scenes = json.loads(scenes_path.read_text(encoding="utf-8"))
     except Exception:
         return []
 
-    # Gemini 有効時は候補を多めに取得して再ランキング
-    candidate_k = config.RERANK_CANDIDATE_K if config.USE_GEMINI else top_k
-    candidate_k = min(candidate_k, collection.count())
-    if candidate_k == 0:
+    if not all_scenes:
         return []
 
-    query_embedding = embed_texts([query], task="retrieval_query")
+    from google import genai
+    from google.genai import types as gtypes
 
-    results = collection.query(
-        query_embeddings=query_embedding,
-        n_results=candidate_k,
-        include=["metadatas", "distances"],
-    )
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-    candidates: list[SceneHit] = []
-    if results["ids"] and results["ids"][0]:
-        for meta, dist in zip(results["metadatas"][0], results["distances"][0]):
-            score = 1.0 / (1.0 + dist) if dist is not None else 0.0
-            candidates.append(SceneHit(
-                speaker=meta["speaker"],
-                start_sec=meta["start_sec"],
-                end_sec=meta["end_sec"],
-                score=round(score, 4),
-                text=meta.get("text", ""),
-                abs_start_iso=meta.get("abs_start_iso", ""),
-                abs_end_iso=meta.get("abs_end_iso", ""),
-            ))
+    candidates_text = ""
+    for i, s in enumerate(all_scenes):
+        time_info = s.get("abs_start_iso") or f"音声の{s['start_sec']}秒目"
+        candidates_text += f"[{i}] {s['speaker']}（{time_info}）：「{s['text'][:300]}」\n"
 
-    if not candidates:
-        return []
-
-    if config.USE_GEMINI:
-        return _rerank_with_gemini(query, candidates, top_k)
-
-    return candidates[:top_k]
-
-
-# ── Gemini 再ランキング ───────────────────────────────────────────────────────
-
-def _rerank_with_gemini(query: str, candidates: list[SceneHit], top_k: int) -> list[SceneHit]:
-    """
-    Gemini Flash に候補リストとクエリを渡し、最も関連するシーンを選んで返す。
-    失敗した場合はベクトルスコア順のまま返す。
-    """
-    try:
-        from google import genai
-        from google.genai import types as gtypes
-
-        client = genai.Client(api_key=config.GEMINI_API_KEY)
-
-        candidates_text = ""
-        for i, h in enumerate(candidates):
-            time_info = h.abs_start_iso if h.abs_start_iso else f"音声の{h.start_sec}秒目"
-            candidates_text += f"[{i}] {h.speaker}（{time_info}）：「{h.text[:300]}」\n"
-
-        prompt = f"""あなたはリアリティショーの映像編集者です。
+    prompt = f"""あなたはリアリティショーの映像編集者です。
 以下の音声文字起こしの候補シーンの中から、検索クエリに最も合うシーンを選んでください。
 
 検索クエリ：「{query}」
@@ -121,6 +82,8 @@ def _rerank_with_gemini(query: str, candidates: list[SceneHit], top_k: int) -> l
   "reasons": ["1位の選んだ理由（20字以内）", "2位の理由", "3位の理由", ...]
 }}
 """
+
+    try:
         response = client.models.generate_content(
             model=config.GEMINI_CHAT_MODEL,
             contents=prompt,
@@ -133,16 +96,94 @@ def _rerank_with_gemini(query: str, candidates: list[SceneHit], top_k: int) -> l
         ranking: list[int] = result.get("ranking", [])
         reasons: list[str] = result.get("reasons", [])
 
-        reranked: list[SceneHit] = []
+        hits: list[SceneHit] = []
         for pos, idx in enumerate(ranking[:top_k]):
-            if 0 <= idx < len(candidates):
-                hit = candidates[idx]
-                hit.reason = reasons[pos] if pos < len(reasons) else ""
-                reranked.append(hit)
-
-        return reranked if reranked else candidates[:top_k]
+            if 0 <= idx < len(all_scenes):
+                s = all_scenes[idx]
+                hits.append(SceneHit(
+                    speaker=s["speaker"],
+                    start_sec=s["start_sec"],
+                    end_sec=s["end_sec"],
+                    score=round(1.0 - pos * 0.1, 4),
+                    text=s["text"],
+                    abs_start_iso=s.get("abs_start_iso", ""),
+                    abs_end_iso=s.get("abs_end_iso", ""),
+                    reason=reasons[pos] if pos < len(reasons) else "",
+                ))
+        return hits if hits else []
 
     except Exception as e:
-        # 再ランキング失敗時はベクトルスコア順をそのまま返す
-        print(f"[rerank] Gemini 再ランキング失敗（フォールバック）: {e}")
-        return candidates[:top_k]
+        print(f"[search] Gemini検索失敗: {e}")
+        return _fallback_keyword_search(query, all_scenes, top_k)
+
+
+def _fallback_keyword_search(
+    query: str, scenes: list[dict], top_k: int
+) -> list[SceneHit]:
+    """Gemini失敗時のフォールバック: 単純なキーワードマッチ"""
+    query_chars = set(query)
+    scored = []
+    for s in scenes:
+        text = s["text"]
+        overlap = len(query_chars & set(text))
+        scored.append((overlap, s))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    hits = []
+    for score, s in scored[:top_k]:
+        hits.append(SceneHit(
+            speaker=s["speaker"],
+            start_sec=s["start_sec"],
+            end_sec=s["end_sec"],
+            score=round(score / max(len(query_chars), 1), 4),
+            text=s["text"],
+            abs_start_iso=s.get("abs_start_iso", ""),
+            abs_end_iso=s.get("abs_end_iso", ""),
+            reason="キーワードマッチ（フォールバック）",
+        ))
+    return hits
+
+
+# ── ローカル ChromaDB 検索（Gemini無効時）──────────────────────────────────────
+
+def _search_with_chroma(query: str, top_k: int, index_dir: Path) -> list[SceneHit]:
+    import chromadb
+    from src.embeddings import embed_texts
+
+    index_path = index_dir / "chroma"
+    if not index_path.exists():
+        return []
+
+    client = chromadb.PersistentClient(path=str(index_path))
+    try:
+        collection = client.get_collection("scenes")
+    except Exception:
+        return []
+
+    candidate_k = min(top_k, collection.count())
+    if candidate_k == 0:
+        return []
+
+    query_embedding = embed_texts([query], task="retrieval_query")
+
+    results = collection.query(
+        query_embeddings=query_embedding,
+        n_results=candidate_k,
+        include=["metadatas", "distances"],
+    )
+
+    hits: list[SceneHit] = []
+    if results["ids"] and results["ids"][0]:
+        for meta, dist in zip(results["metadatas"][0], results["distances"][0]):
+            score = 1.0 / (1.0 + dist) if dist is not None else 0.0
+            hits.append(SceneHit(
+                speaker=meta["speaker"],
+                start_sec=meta["start_sec"],
+                end_sec=meta["end_sec"],
+                score=round(score, 4),
+                text=meta.get("text", ""),
+                abs_start_iso=meta.get("abs_start_iso", ""),
+                abs_end_iso=meta.get("abs_end_iso", ""),
+            ))
+
+    return hits

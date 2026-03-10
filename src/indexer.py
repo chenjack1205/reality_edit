@@ -5,16 +5,12 @@
 """
 import gc
 import json
-import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import config
-from src.embeddings import embed_texts
 from src.transcribe import transcribe_sources, TranscriptSegment
-
-logger = logging.getLogger(__name__)
 
 
 def _speaker_to_filename(speaker: str) -> str:
@@ -119,18 +115,18 @@ def build_index(
     # file_start_iso は speaker でルックアップできるよう辞書化
     start_iso_map = {spk: iso for _, spk, iso in sources}
 
-    logger.info("Whisper文字起こし開始（モデル: %s）", whisper_model_size)
+    print(f"[indexer] Whisper文字起こし開始（モデル: {whisper_model_size}）", flush=True)
     transcription_results = transcribe_sources(
         transcribe_input, model_size=whisper_model_size, language=language
     )
-    logger.info("Whisper文字起こし完了 → メモリ解放済み")
+    print("[indexer] Whisper文字起こし完了 → メモリ解放済み", flush=True)
 
     all_scenes: list[dict] = []
     for speaker, path, segments in transcription_results:
         file_start_iso = start_iso_map.get(speaker, "")
         scenes = segments_to_scenes(speaker, segments, file_start_iso=file_start_iso)
         all_scenes.extend(scenes)
-        logger.info("  %s: %d セグメント → %d シーン", speaker, len(segments), len(scenes))
+        print(f"[indexer]   {speaker}: {len(segments)} セグメント → {len(scenes)} シーン", flush=True)
 
         transcript_path = out_dir / f"{_speaker_to_filename(speaker)}.json"
         with open(transcript_path, "w", encoding="utf-8") as f:
@@ -146,37 +142,46 @@ def build_index(
     if not all_scenes:
         return all_scenes
 
-    logger.info("埋め込みベクトル計算開始（%d テキスト）", len(all_scenes))
-    texts = [s["text"] for s in all_scenes]
-    embeddings = embed_texts(texts, task="retrieval_document")
-    logger.info("埋め込みベクトル計算完了 → ChromaDB保存開始")
-
-    import chromadb
-
-    index_path = config.INDEX_DIR / "chroma"
-    client = chromadb.PersistentClient(path=str(index_path))
-    try:
-        client.delete_collection("scenes")
-    except Exception:
-        pass
-    collection = client.create_collection("scenes", metadata={"description": "reality show scenes"})
-
-    ids = [f"{s['speaker']}_{s['abs_start_iso'] or s['start_sec']}" for s in all_scenes]
-    metadatas = [
-        {
-            "speaker": s["speaker"],
-            "start_sec": s["start_sec"],
-            "end_sec": s["end_sec"],
-            "abs_start_iso": s["abs_start_iso"],
-            "abs_end_iso": s["abs_end_iso"],
-            "text": s["text"][:500],
-        }
-        for s in all_scenes
-    ]
-    collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
-
+    # シーンJSONは常に保存（Geminiモードでもローカルモードでも使う）
     scenes_path = config.INDEX_DIR / "scenes.json"
     with open(scenes_path, "w", encoding="utf-8") as f:
         json.dump(all_scenes, f, ensure_ascii=False, indent=2)
+    print(f"[indexer] scenes.json 保存完了: {len(all_scenes)} シーン")
+
+    if config.USE_GEMINI:
+        # Gemini有効時: ローカル埋め込みモデル不要（メモリ節約）
+        # 検索時にGeminiが直接シーンを評価する
+        print("[indexer] Geminiモード: ローカル埋め込みスキップ（メモリ節約）")
+    else:
+        # Gemini無効時: ローカルモデルで埋め込み → ChromaDB
+        print("[indexer] ローカルモード: 埋め込みベクトル計算開始")
+        from src.embeddings import embed_texts
+        texts = [s["text"] for s in all_scenes]
+        embeddings = embed_texts(texts, task="retrieval_document")
+        print("[indexer] 埋め込み完了 → ChromaDB保存")
+
+        import chromadb
+        index_path = config.INDEX_DIR / "chroma"
+        client = chromadb.PersistentClient(path=str(index_path))
+        try:
+            client.delete_collection("scenes")
+        except Exception:
+            pass
+        collection = client.create_collection("scenes", metadata={"description": "reality show scenes"})
+
+        ids = [f"{s['speaker']}_{s['abs_start_iso'] or s['start_sec']}" for s in all_scenes]
+        metadatas = [
+            {
+                "speaker": s["speaker"],
+                "start_sec": s["start_sec"],
+                "end_sec": s["end_sec"],
+                "abs_start_iso": s["abs_start_iso"],
+                "abs_end_iso": s["abs_end_iso"],
+                "text": s["text"][:500],
+            }
+            for s in all_scenes
+        ]
+        collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
+        print("[indexer] ChromaDB保存完了")
 
     return all_scenes
