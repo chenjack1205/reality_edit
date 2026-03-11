@@ -58,7 +58,7 @@ _MIME_MAP = {
 }
 
 # 1チャンクの長さ（秒）。長いほどリクエスト数減・無料枠消費を抑える
-_CHUNK_SEC = 600  # 10分
+_CHUNK_SEC = 900  # 15分
 
 
 def _get_duration(audio_path: Path) -> float:
