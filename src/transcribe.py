@@ -17,6 +17,20 @@ from dataclasses import dataclass
 import config
 
 
+def _cap_segment_duration(seg: TranscriptSegment) -> TranscriptSegment:
+    """Geminiの過大なend_secを補正。日本語は約4〜5文字/秒程度なので、テキスト長から妥当な最大長を算出"""
+    duration = seg.end_sec - seg.start_sec
+    # 4文字/秒を基準に最大長を算出（最低2秒、最高25秒）
+    max_duration = min(25.0, max(2.0, len(seg.text) / 4.0))
+    if duration > max_duration:
+        return TranscriptSegment(
+            start_sec=seg.start_sec,
+            end_sec=round(seg.start_sec + max_duration, 2),
+            text=seg.text,
+        )
+    return seg
+
+
 def _normalize_text(text: str) -> str:
     """Geminiの分かち書き（単語間スペース）を除去して自然な日本語にする"""
     # 日本語文字（ひらがな・カタカナ・漢字）の間のスペースを削除
@@ -304,31 +318,13 @@ def _transcribe_file_gemini(
     # 時系列ソート（start_sec, end_sec の順で安定ソート）
     all_segments.sort(key=lambda s: (s.start_sec, s.end_sec))
 
-    # 重複・オーバーラップ除去: 同一時刻付近で重なるセグメントは長い方のみ残す
-    deduped: list[TranscriptSegment] = []
-    for s in all_segments:
-        # 直近のセグメントと重なるか
-        overlap = False
-        for i in range(len(deduped) - 1, -1, -1):
-            r = deduped[i]
-            if s.start_sec - r.end_sec > 1.0:
-                break  # 時系列順なのでこれ以降は重ならない
-            if r.start_sec <= s.end_sec and r.end_sec >= s.start_sec:
-                # 重複: 一方が他方に含まれる場合は短い方を破棄
-                if s.text in r.text or r.text in s.text:
-                    overlap = True
-                    if len(s.text) > len(r.text):
-                        deduped[i] = s
-                    break
-                # テキストが異なる重複は両方残す（発話が重なっている場合）
-        if not overlap:
-            deduped.append(s)
-
-    # 同一キー完全重複の最終除去
+    # 完全同一の重複のみ除去（同じ発言を2回した場合は時間が違うので両方残る）
+    # テキスト・時間が完全に同じセグメントだけ破棄（Geminiの二重出力対策）
     seen: set[tuple[float, float, str]] = set()
     final: list[TranscriptSegment] = []
-    for s in deduped:
-        key = (round(s.start_sec, 1), round(s.end_sec, 1), s.text[:80])
+    for s in all_segments:
+        s = _cap_segment_duration(s)  # Geminiの過大なend_secを補正
+        key = (round(s.start_sec, 1), round(s.end_sec, 1), s.text)
         if key in seen:
             continue
         seen.add(key)
