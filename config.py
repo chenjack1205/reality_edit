@@ -19,11 +19,12 @@ UPLOADS_DIR = DATA_DIR / "uploads"
 
 # Whisper モデル（tiny = 超軽量、base = 軽量、small = バランス、large-v3 = 高精度）
 # 無料サーバー(512MB RAM)では base を推奨。ローカルなら small 以上を推奨。
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 
 # ── Gemini API ──────────────────────────────────────────────────────────────
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-USE_GEMINI: bool = bool(GEMINI_API_KEY)
+# 一時的にWhisperのみで動作させる場合は False に
+USE_GEMINI: bool = False  # bool(GEMINI_API_KEY)
 
 # Gemini有効時はローカル埋め込みモデル(SentenceTransformer)をスキップ
 # → メモリ大幅削減（512MB環境でもOOM回避）
