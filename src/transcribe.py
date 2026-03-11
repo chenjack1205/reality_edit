@@ -177,6 +177,8 @@ def _upload_and_transcribe_chunk(
 - 聞こえた言葉をそのまま正確に書き起こす（意訳しない）
 - 無音区間はスキップ
 - セグメントは発話単位で分割（1文や1フレーズごと。細かく切りすぎない）
+- セグメントは時系列順に並べ、重複やオーバーラップを避ける（前のend_secと次のstart_secは連続または無音区間を挟む）
+- 同じ内容を複数回出力しない
 - 日本語の場合は分かち書きをせず、通常の文章として書く（単語間にスペースを入れない）
 """
 
@@ -258,7 +260,13 @@ def _transcribe_file_gemini(
                         chunk_idx=idx,
                         total_chunks=len(chunks),
                     )
-                    all_segments.extend(segs)
+                    # このチャンクの範囲内のセグメントのみ採用（Geminiの誤ったタイムスタンプを除去）
+                    chunk_end = (
+                        chunks[idx + 1][1] if idx + 1 < len(chunks) else duration
+                    )
+                    for s in segs:
+                        if offset_sec <= s.start_sec < chunk_end and s.start_sec < s.end_sec:
+                            all_segments.append(s)
                     last_err = None
                     break
                 except Exception as e:
@@ -293,14 +301,45 @@ def _transcribe_file_gemini(
                     flush=True,
                 )
 
-    # チャンク間でタイムスタンプが逆行する場合があるので時系列に並び替え
-    all_segments.sort(key=lambda s: s.start_sec)
+    # 時系列ソート（start_sec, end_sec の順で安定ソート）
+    all_segments.sort(key=lambda s: (s.start_sec, s.end_sec))
 
+    # 重複・オーバーラップ除去: 同一時刻付近で重なるセグメントは長い方のみ残す
+    deduped: list[TranscriptSegment] = []
+    for s in all_segments:
+        # 直近のセグメントと重なるか
+        overlap = False
+        for i in range(len(deduped) - 1, -1, -1):
+            r = deduped[i]
+            if s.start_sec - r.end_sec > 1.0:
+                break  # 時系列順なのでこれ以降は重ならない
+            if r.start_sec <= s.end_sec and r.end_sec >= s.start_sec:
+                # 重複: 一方が他方に含まれる場合は短い方を破棄
+                if s.text in r.text or r.text in s.text:
+                    overlap = True
+                    if len(s.text) > len(r.text):
+                        deduped[i] = s
+                    break
+                # テキストが異なる重複は両方残す（発話が重なっている場合）
+        if not overlap:
+            deduped.append(s)
+
+    # 同一キー完全重複の最終除去
+    seen: set[tuple[float, float, str]] = set()
+    final: list[TranscriptSegment] = []
+    for s in deduped:
+        key = (round(s.start_sec, 1), round(s.end_sec, 1), s.text[:80])
+        if key in seen:
+            continue
+        seen.add(key)
+        final.append(s)
+
+    final.sort(key=lambda s: (s.start_sec, s.end_sec))
     print(
-        f"[transcribe] Gemini: {audio_path.name} 合計 {len(all_segments)} セグメント",
+        f"[transcribe] Gemini: {audio_path.name} 合計 {len(final)} セグメント",
         flush=True,
     )
-    return all_segments
+    return final
 
 
 # ── Whisper 文字起こし（フォールバック）─────────────────────────────────────
