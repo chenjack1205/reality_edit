@@ -17,6 +17,14 @@ from dataclasses import dataclass
 import config
 
 
+@dataclass
+class TranscriptSegment:
+    """1セグメント分の文字起こし（タイムスタンプ付き）"""
+    start_sec: float
+    end_sec: float
+    text: str
+
+
 def _cap_segment_duration(seg: TranscriptSegment) -> TranscriptSegment:
     """Geminiの過大なend_secを補正。日本語は約4〜5文字/秒程度なので、テキスト長から妥当な最大長を算出"""
     duration = seg.end_sec - seg.start_sec
@@ -46,14 +54,6 @@ def _normalize_text(text: str) -> str:
 
 class QuotaExceededError(Exception):
     """Gemini APIのquota/レート制限超過"""
-
-
-@dataclass
-class TranscriptSegment:
-    """1セグメント分の文字起こし（タイムスタンプ付き）"""
-    start_sec: float
-    end_sec: float
-    text: str
 
 
 # ── Gemini 文字起こし ───────────────────────────────────────────────────────
