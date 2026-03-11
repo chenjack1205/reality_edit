@@ -338,9 +338,60 @@ def _transcribe_file_gemini(
     return final
 
 
-# ── Whisper 文字起こし（フォールバック）─────────────────────────────────────
+# ── Gemini + Whisper マージ（テキストはGemini、時間はWhisper）────────────────────
 
-def _load_whisper(model_size: str = "small"):
+def _align_with_whisper_timestamps(
+    gemini_segments: list[TranscriptSegment],
+    whisper_segments: list[TranscriptSegment],
+) -> list[TranscriptSegment]:
+    """
+    Geminiのテキスト + Whisperのタイムスタンプでマージ。
+    テキスト量の比率で対応付け、Whisperの正確な時間をGeminiの各セグメントに割り当てる。
+    """
+    if not gemini_segments or not whisper_segments:
+        return gemini_segments
+
+    total_g = sum(len(g.text) for g in gemini_segments)
+    total_w = sum(len(w.text) for w in whisper_segments)
+    if total_g == 0 or total_w == 0:
+        return gemini_segments
+
+    result: list[TranscriptSegment] = []
+    w_idx = 0
+    n = len(gemini_segments)
+
+    for i, g in enumerate(gemini_segments):
+        is_last = i == n - 1
+        target_share = len(g.text) / total_g
+        target_w_len = target_share * total_w
+
+        seg_start: float | None = None
+        seg_end: float | None = None
+        seg_acc = 0.0
+
+        while w_idx < len(whisper_segments) and (is_last or seg_acc < target_w_len):
+            w = whisper_segments[w_idx]
+            if seg_start is None:
+                seg_start = w.start_sec
+            seg_end = w.end_sec
+            seg_acc += len(w.text)
+            w_idx += 1
+            if not is_last and seg_acc >= target_w_len:
+                break
+
+        if seg_start is not None and seg_end is not None:
+            result.append(
+                TranscriptSegment(start_sec=seg_start, end_sec=seg_end, text=g.text)
+            )
+        else:
+            result.append(g)
+
+    return result
+
+
+# ── Whisper 文字起こし（フォールバック・タイムスタンプ補正）──────────────────────
+
+def _load_whisper(model_size: str = "tiny"):
     from faster_whisper import WhisperModel
     return WhisperModel(model_size, device="cpu", compute_type="int8")
 
@@ -382,32 +433,38 @@ def transcribe_sources(
     results = []
 
     if config.USE_GEMINI:
-        print("[transcribe] Geminiモードで文字起こし開始", flush=True)
-        for path, speaker in sources:
-            path = Path(path)
-            if not path.exists():
-                raise FileNotFoundError(f"音声が見つかりません: {path}")
-            segments = []
-            try:
-                segments = _transcribe_file_gemini(path, language=language or "ja")
-            except QuotaExceededError:
-                pass  # 既にログ出力済み、Whisperへ
-            except Exception as e:
-                print(f"[transcribe] Gemini失敗、Whisperにフォールバック: {e}", flush=True)
-            if not segments:
-                print(
-                    f"[transcribe] {path.name}: セグメント0件（quota超過等）→ Whisperにフォールバック",
-                    flush=True,
-                )
-                if fallback_messages is not None and len(fallback_messages) == 0:
-                    fallback_messages.append(
-                        "GeminiのAPI制限のため、Whisperで文字起こししました。"
+        print("[transcribe] Geminiモードで文字起こし開始（Whisper tinyでタイムスタンプ補正）", flush=True)
+        model = _load_whisper(model_size)
+        try:
+            for path, speaker in sources:
+                path = Path(path)
+                if not path.exists():
+                    raise FileNotFoundError(f"音声が見つかりません: {path}")
+                segments = []
+                try:
+                    segments = _transcribe_file_gemini(path, language=language or "ja")
+                except QuotaExceededError:
+                    pass
+                except Exception as e:
+                    print(f"[transcribe] Gemini失敗、Whisperにフォールバック: {e}", flush=True)
+                if not segments:
+                    print(
+                        f"[transcribe] {path.name}: セグメント0件（quota超過等）→ Whisperにフォールバック",
+                        flush=True,
                     )
-                model = _load_whisper(model_size)
-                segments = _transcribe_file_whisper(path, model=model, language=language)
-                del model
-                gc.collect()
-            results.append((speaker, path, segments))
+                    if fallback_messages is not None and len(fallback_messages) == 0:
+                        fallback_messages.append(
+                            "GeminiのAPI制限のため、Whisperで文字起こししました。"
+                        )
+                    segments = _transcribe_file_whisper(path, model=model, language=language)
+                else:
+                    print(f"[transcribe] {path.name}: Whisper tinyでタイムスタンプ補正中", flush=True)
+                    whisper_segs = _transcribe_file_whisper(path, model=model, language=language)
+                    segments = _align_with_whisper_timestamps(segments, whisper_segs)
+                results.append((speaker, path, segments))
+        finally:
+            del model
+            gc.collect()
     else:
         print("[transcribe] Whisperモードで文字起こし開始", flush=True)
         model = _load_whisper(model_size)
