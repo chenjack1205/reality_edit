@@ -25,6 +25,10 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny")
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 USE_GEMINI: bool = bool(GEMINI_API_KEY)
 
+# メモリ制約時: WhisperマージをスキップしGeminiのみ使用（タイムスタンプ精度は落ちる）
+# Railway等でOOMする場合: SKIP_WHISPER_MERGE=true を環境変数に設定
+SKIP_WHISPER_MERGE: bool = os.getenv("SKIP_WHISPER_MERGE", "").lower() in ("1", "true", "yes")
+
 # Gemini有効時はローカル埋め込みモデル(SentenceTransformer)をスキップ
 # → メモリ大幅削減（512MB環境でもOOM回避）
 # Gemini無効時のみローカルモデルでベクトル検索

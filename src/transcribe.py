@@ -476,8 +476,9 @@ def transcribe_sources(
     results = []
 
     if config.USE_GEMINI:
-        print("[transcribe] Geminiモードで文字起こし開始（Whisper tinyでタイムスタンプ補正）", flush=True)
-        model = _load_whisper(model_size)
+        merge_msg = "（Whisperマージスキップ）" if config.SKIP_WHISPER_MERGE else "（Whisper tinyでタイムスタンプ補正）"
+        print(f"[transcribe] Geminiモードで文字起こし開始{merge_msg}", flush=True)
+        model = None if config.SKIP_WHISPER_MERGE else _load_whisper(model_size)
         try:
             for path, speaker in sources:
                 path = Path(path)
@@ -499,7 +500,13 @@ def transcribe_sources(
                         fallback_messages.append(
                             "GeminiのAPI制限のため、Whisperで文字起こししました。"
                         )
+                    if model is None:
+                        model = _load_whisper(model_size)
                     segments = _transcribe_file_whisper(path, model=model, language=language)
+                elif config.SKIP_WHISPER_MERGE:
+                    print(f"[transcribe] {path.name}: Geminiのみ使用（Whisperマージスキップ）", flush=True)
+                    if fallback_messages is not None and not any("マージスキップ" in m for m in fallback_messages):
+                        fallback_messages.append("メモリ制約のためWhisperマージをスキップしました（タイムスタンプはGeminiの精度）")
                 else:
                     print(f"[transcribe] {path.name}: Whisper時間 + Geminiテキストでマージ", flush=True)
                     gc.collect()
@@ -507,7 +514,8 @@ def transcribe_sources(
                     segments = _merge_gemini_whisper(segments, whisper_segs)
                 results.append((speaker, path, segments))
         finally:
-            del model
+            if model is not None:
+                del model
             gc.collect()
     else:
         print("[transcribe] Whisperモードで文字起こし開始", flush=True)
