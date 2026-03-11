@@ -412,6 +412,10 @@ def _transcribe_file_whisper(
 ) -> list[TranscriptSegment]:
     if model is None:
         model = _load_whisper(model_size)
+    duration = _get_duration(audio_path)
+    # 10分超はチャンク分割してメモリ節約（サーバーOOM対策）
+    if duration > 600:
+        return _transcribe_file_whisper_chunked(audio_path, model, language, duration)
     path_str = str(audio_path.resolve())
     segments_raw, _ = model.transcribe(path_str, language=language, word_timestamps=False)
     return [
@@ -423,6 +427,37 @@ def _transcribe_file_whisper(
         for s in segments_raw
         if s.text.strip()
     ]
+
+
+def _transcribe_file_whisper_chunked(
+    audio_path: Path,
+    model,
+    language: str | None,
+    duration: float,
+    chunk_sec: int = 600,
+) -> list[TranscriptSegment]:
+    """長い音声をチャンク分割してWhisperで処理（メモリ節約）"""
+    all_segments: list[TranscriptSegment] = []
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        chunks = _split_audio(audio_path, chunk_sec, Path(tmp_dir))
+        for idx, (chunk_path, offset_sec) in enumerate(chunks):
+            gc.collect()
+            path_str = str(chunk_path.resolve())
+            segments_raw, _ = model.transcribe(path_str, language=language, word_timestamps=False)
+            count = 0
+            for s in segments_raw:
+                if not s.text.strip():
+                    continue
+                all_segments.append(
+                    TranscriptSegment(
+                        start_sec=round(s.start + offset_sec, 2),
+                        end_sec=round(s.end + offset_sec, 2),
+                        text=_normalize_text(s.text.strip()),
+                    )
+                )
+                count += 1
+            print(f"[transcribe] Whisper: チャンク{idx+1}/{len(chunks)} → {count} セグメント", flush=True)
+    return all_segments
 
 
 # ── メインエントリポイント ──────────────────────────────────────────────────
@@ -467,6 +502,7 @@ def transcribe_sources(
                     segments = _transcribe_file_whisper(path, model=model, language=language)
                 else:
                     print(f"[transcribe] {path.name}: Whisper時間 + Geminiテキストでマージ", flush=True)
+                    gc.collect()
                     whisper_segs = _transcribe_file_whisper(path, model=model, language=language)
                     segments = _merge_gemini_whisper(segments, whisper_segs)
                 results.append((speaker, path, segments))
