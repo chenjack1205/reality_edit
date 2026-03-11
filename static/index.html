@@ -734,7 +734,11 @@
           showMsg(indexMsg, `<span class="spinner"></span>&nbsp; 音声ファイルを解析中${'…'.repeat(dots+1)}&nbsp; 初回はAIモデルのダウンロードで数分かかります。このページを開いたままにしてください。`, 'info');
         } else if (data.state === 'done') {
           clearInterval(timer);
-          showMsg(indexMsg, '✅&nbsp; 解析が完了しました！ 下の検索欄からシーンを検索できます。', 'success');
+          let msg = '✅&nbsp; 解析が完了しました！ 下の検索欄からシーンを検索できます。';
+          if (data.fallback) {
+            msg += `<br><span style="color:var(--warn); font-size:0.9em;">ℹ️ ${data.fallback}</span>`;
+          }
+          showMsg(indexMsg, msg, 'success');
           indexBtn.disabled = false;
           setStep(3);
           showDownloadButtons();

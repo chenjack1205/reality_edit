@@ -58,7 +58,7 @@ def cmd_index(args):
             console.print(f"[red]ファイルが見つかりません: {p}[/red]")
             return 1
     console.print(f"[cyan]音声の文字起こしとインデックス作成を開始します（{len(sources)} 話者）...[/cyan]")
-    scenes = build_index(sources, whisper_model_size=args.model, language=args.language or None)
+    scenes, _ = build_index(sources, whisper_model_size=args.model, language=args.language or None)
     console.print(f"[green]完了。シーン数: {len(scenes)}[/green]")
     return 0
 

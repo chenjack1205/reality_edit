@@ -115,9 +115,13 @@ def build_index(
     # file_start_iso は speaker でルックアップできるよう辞書化
     start_iso_map = {spk: iso for _, spk, iso in sources}
 
+    fallback_messages: list[str] = []
     print(f"[indexer] Whisper文字起こし開始（モデル: {whisper_model_size}）", flush=True)
     transcription_results = transcribe_sources(
-        transcribe_input, model_size=whisper_model_size, language=language
+        transcribe_input,
+        model_size=whisper_model_size,
+        language=language,
+        fallback_messages=fallback_messages,
     )
     print("[indexer] Whisper文字起こし完了 → メモリ解放済み", flush=True)
 
@@ -140,7 +144,7 @@ def build_index(
     gc.collect()
 
     if not all_scenes:
-        return all_scenes
+        return all_scenes, (fallback_messages[0] if fallback_messages else None)
 
     # シーンJSONは常に保存（Geminiモードでもローカルモードでも使う）
     scenes_path = config.INDEX_DIR / "scenes.json"
@@ -184,4 +188,5 @@ def build_index(
         collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas)
         print("[indexer] ChromaDB保存完了")
 
-    return all_scenes
+    fallback_msg = fallback_messages[0] if fallback_messages else None
+    return all_scenes, fallback_msg

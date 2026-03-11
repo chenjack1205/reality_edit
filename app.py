@@ -149,7 +149,7 @@ def upload_audios(
 
 def _run_index_task():
     global _index_status
-    _index_status = {"state": "running", "scenes_count": 0, "error": ""}
+    _index_status = {"state": "running", "scenes_count": 0, "error": "", "fallback": ""}
     try:
         mapping = json.loads(UPLOADS_MAPPING.read_text(encoding="utf-8"))
         sources = [
@@ -157,14 +157,19 @@ def _run_index_task():
             for m in mapping
         ]
         print(f"=== 解析開始: {len(sources)} ファイル ===", flush=True)
-        scenes = build_index(sources, whisper_model_size=config.WHISPER_MODEL, language="ja")
+        scenes, fallback_msg = build_index(sources, whisper_model_size=config.WHISPER_MODEL, language="ja")
         print(f"=== 解析完了: {len(scenes)} シーン ===", flush=True)
-        _index_status = {"state": "done", "scenes_count": len(scenes), "error": ""}
+        _index_status = {
+            "state": "done",
+            "scenes_count": len(scenes),
+            "error": "",
+            "fallback": fallback_msg or "",
+        }
     except Exception as e:
         import traceback
         traceback.print_exc()
         print(f"=== 解析エラー: {e} ===", flush=True)
-        _index_status = {"state": "error", "scenes_count": 0, "error": str(e)}
+        _index_status = {"state": "error", "scenes_count": 0, "error": str(e), "fallback": ""}
 
 
 @app.post("/index")
